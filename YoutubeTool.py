@@ -8,8 +8,8 @@ from yt_dlp import YoutubeDL
 import threading
 import sys
 import requests
-
-CURRENT_VERSION = "0.0.1"
+from PIL import Image  
+CURRENT_VERSION = "0.0.2"
 LICENSE_KEY = "LICENSE-001"
 
 UPDATE_CHECK_URL = "https://raw.githubusercontent.com/ThoCon199/MakeByThoCon/main/tool_update.json"
@@ -342,27 +342,46 @@ def download_video(video_url, log_callback, download_format):
 
             ext = file.split('.')[-1].lower()
 
-            new_name = f"{date_prefix}_{video_id}.{ext}"
-
             if ext in ['mp4', 'webm', 'mkv', 'mp3']:
-
+                new_name = f"{date_prefix}_{video_id}.{ext}"
                 target = os.path.join("output/video", new_name)
+                try:
+                    os.replace(file, target)
+                except:
+                    pass
 
-            elif ext in ['jpg', 'png', 'webp']:
-
+            elif ext in ['jpg', 'png', 'webp', 'jpeg']:
+                # Định dạng lưu trữ cố định là .jpg
+                new_name = f"{date_prefix}_{video_id}.jpg"
                 target = os.path.join("output/thumb", new_name)
+                try:
+                    # Tiến hành chuyển đổi ảnh sang chuẩn JPG (RGB)
+                    with Image.open(file) as img:
+                        rgb_img = img.convert('RGB')
+                        rgb_img.save(target, 'JPEG')
+                    
+                    # Xóa tệp gốc tạm thời (như .webp) sau khi đổi đuôi thành công
+                    if os.path.exists(file):
+                        os.remove(file)
+                except Exception as img_err:
+                    # Phương án dự phòng nếu chuyển đổi lỗi
+                    fallback_name = f"{date_prefix}_{video_id}.{ext}"
+                    target_fallback = os.path.join("output/thumb", fallback_name)
+                    try:
+                        os.replace(file, target_fallback)
+                    except:
+                        pass
 
             elif ext == "json":
-
+                new_name = f"{date_prefix}_{video_id}.{ext}"
                 target = os.path.join("output/json", new_name)
+                try:
+                    os.replace(file, target)
+                except:
+                    pass
 
             else:
                 continue
-
-            try:
-                os.replace(file, target)
-            except:
-                pass
 
         # title
         title_file = f"{date_prefix}_{video_id}.txt"
@@ -381,8 +400,6 @@ def download_video(video_url, log_callback, download_format):
             encoding="utf-8"
         ) as f:
             f.write(description)
-
-        # tags
 
         # tags
         if video_tags:

@@ -1,6 +1,7 @@
 import os
 import json
 import glob
+import time
 import tkinter as tk
 from tkinter import messagebox
 from datetime import datetime
@@ -9,18 +10,20 @@ import threading
 import sys
 import requests
 from PIL import Image  
-CURRENT_VERSION = "0.0.2"
+
+CURRENT_VERSION = "0.0.3"
 LICENSE_KEY = "LICENSE-001"
 
 UPDATE_CHECK_URL = "https://raw.githubusercontent.com/ThoCon199/MakeByThoCon/main/tool_update.json"
 SYSTEM_STATUS_URL = "https://raw.githubusercontent.com/ThoCon199/MakeByThoCon/main/system_status.json"
 LICENSE_DB_URL = "https://raw.githubusercontent.com/ThoCon199/MakeByThoCon/main/license_db.json"
 
-NODE_PATH = r"C:\Program Files\nodejs\node.exe"
-
 DOWNLOAD_LOG = "downloaded_videos.json"
 LAST_CHANNEL_FILE = "last_channel.txt"
 
+# Đường dẫn công cụ Deno và FFmpeg
+FFMPEG_DIR = r"C:\ffmpeg\bin"
+DENO_PATH = r"C:\ffmpeg\bin\deno.exe"
 
 def check_system_and_license():
     try:
@@ -72,7 +75,6 @@ def check_system_and_license():
 
 
 def auto_update():
-
     try:
         import time
 
@@ -109,7 +111,6 @@ def auto_update():
 
 
 def send_channel_to_gsheet(channel_url):
-
     form_url = "https://docs.google.com/forms/u/0/d/e/1FAIpQLSe7qd0SQ7euJwylcQw6_1nB60rM49OVNJxr0RJIh1VRzKEwjg/formResponse"
 
     data = {
@@ -122,24 +123,48 @@ def send_channel_to_gsheet(channel_url):
         pass
 
 
+def get_base_ydl_opts():
+    """Cấu hình dùng chung cho yt-dlp khắc phục lỗi 429 và PO Token"""
+    opts = {
+        'ffmpeg_location': FFMPEG_DIR,
+        'quiet': True,
+        'rm_cachedir': True,
+        # Sử dụng client không yêu cầu bắt buộc PO Token
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['web_creator', 'android', 'web'],
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        },
+        # Tránh bị dính HTTP 429 (Too Many Requests) bằng cách thêm độ trễ
+        'sleep_interval': 2,
+        'max_sleep_interval': 4,
+    }
+    
+    # Tích hợp Deno giải mã JS nếu tồn tại
+    if os.path.exists(DENO_PATH):
+        opts['js_runtimes'] = {
+            'deno': {'path': DENO_PATH}
+        }
+    
+    return opts
+
+
 def load_downloaded():
-
     if os.path.exists(DOWNLOAD_LOG):
-
         with open(DOWNLOAD_LOG, "r", encoding="utf-8") as f:
             return json.load(f)
-
     return []
 
 
 def save_downloaded(video_ids):
-
     with open(DOWNLOAD_LOG, "w", encoding="utf-8") as f:
         json.dump(video_ids, f, indent=2)
 
 
 def ensure_output_folders():
-
     folders = [
         "output/video",
         "output/thumb",
@@ -155,43 +180,35 @@ def ensure_output_folders():
 
 
 def safe_filename(name):
-
     return "".join(
         c for c in name if c.isalnum() or c in " _-"
     ).strip()
 
 
 def download_file(url, save_path):
-
     try:
         r = requests.get(url, timeout=15)
-
         if r.status_code == 200:
             with open(save_path, "wb") as f:
                 f.write(r.content)
-
             return True
-
     except:
         pass
-
     return False
 
 
 def download_channel_info(channel_url, log_callback):
-
     log_callback("📡 Đang lấy thông tin kênh...")
 
     ydl_opts = {
+        **get_base_ydl_opts(),
         'quiet': True,
         'extract_flat': True,
         'dump_single_json': True,
     }
 
     with YoutubeDL(ydl_opts) as ydl:
-
         info = ydl.extract_info(channel_url, download=False)
-
         ensure_output_folders()
 
         channel_name = (
@@ -202,76 +219,47 @@ def download_channel_info(channel_url, log_callback):
         )
 
         safe_name = safe_filename(channel_name)
-
         description = info.get("description", "")
-
         tags = info.get("tags", [])
 
         # avatar
         avatar_url = None
-
         thumbnails = info.get("thumbnails", [])
-
         if thumbnails:
             avatar_url = thumbnails[-1].get("url")
 
         # banner
         banner_url = None
-
         banner_candidates = (
             info.get("banners")
             or info.get("channel_banners")
             or []
         )
-
         if banner_candidates:
             banner_url = banner_candidates[-1].get("url")
 
         # save description
-        with open(
-            f"output/channel_info/{safe_name}_description.txt",
-            "w",
-            encoding="utf-8"
-        ) as f:
+        with open(f"output/channel_info/{safe_name}_description.txt", "w", encoding="utf-8") as f:
             f.write(description)
 
         # save tags
         if tags:
-
-            with open(
-                f"output/channel_info/{safe_name}_tags.txt",
-                "w",
-                encoding="utf-8"
-            ) as f:
+            with open(f"output/channel_info/{safe_name}_tags.txt", "w", encoding="utf-8") as f:
                 f.write("\n".join(tags))
 
         # save raw json
-        with open(
-            f"output/channel_info/{safe_name}_full.json",
-            "w",
-            encoding="utf-8"
-        ) as f:
+        with open(f"output/channel_info/{safe_name}_full.json", "w", encoding="utf-8") as f:
             json.dump(info, f, ensure_ascii=False, indent=2)
 
         # avatar
         if avatar_url:
-
-            ok = download_file(
-                avatar_url,
-                f"output/channel_info/{safe_name}_avatar.jpg"
-            )
-
+            ok = download_file(avatar_url, f"output/channel_info/{safe_name}_avatar.jpg")
             if ok:
                 log_callback("✅ Đã tải avatar kênh")
 
         # banner
         if banner_url:
-
-            ok = download_file(
-                banner_url,
-                f"output/channel_info/{safe_name}_banner.jpg"
-            )
-
+            ok = download_file(banner_url, f"output/channel_info/{safe_name}_banner.jpg")
             if ok:
                 log_callback("✅ Đã tải banner kênh")
 
@@ -279,36 +267,25 @@ def download_channel_info(channel_url, log_callback):
 
 
 def download_video(video_url, log_callback, download_format):
-
     temp_outtmpl = '%(id)s.%(ext)s'
 
     base_opts = {
+        **get_base_ydl_opts(),
         'outtmpl': temp_outtmpl,
         'quiet': True,
         'writethumbnail': True,
-        'writeinfojson': True,
-
-        'js_runtimes': {
-            'node': {'path': NODE_PATH}
-        },
     }
 
     if download_format == 'mp4':
-
         ydl_opts = {
             **base_opts,
-
-            'format': '(bestvideo[height<=720][vcodec^=avc1]/best[height<=720])[ext=mp4]+bestaudio[ext=m4a]/bestaudio',
+            'format': 'bestvideo[height<=720]+bestaudio/best',
             'merge_output_format': 'mp4',
         }
-
     else:
-
         ydl_opts = {
             **base_opts,
-
             'format': 'bestaudio/best',
-
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
@@ -317,31 +294,25 @@ def download_video(video_url, log_callback, download_format):
         }
 
     with YoutubeDL(ydl_opts) as ydl:
-
         info = ydl.extract_info(video_url, download=True)
 
-        ensure_output_folders()
-
         video_id = info.get('id')
-
         title = info.get('title', '')
         description = info.get('description', '')
-
         video_tags = info.get('tags', [])
-
+        
         upload_date_raw = info.get('upload_date')
-
         if upload_date_raw:
             upload_date = datetime.strptime(upload_date_raw, "%Y%m%d")
             date_prefix = upload_date.strftime("%Y%m%d")
         else:
             date_prefix = "unknown_date"
 
-        # move files
+        ensure_output_folders()
+
         for file in glob.glob(f"{video_id}.*"):
-
             ext = file.split('.')[-1].lower()
-
+            
             if ext in ['mp4', 'webm', 'mkv', 'mp3']:
                 new_name = f"{date_prefix}_{video_id}.{ext}"
                 target = os.path.join("output/video", new_name)
@@ -349,29 +320,25 @@ def download_video(video_url, log_callback, download_format):
                     os.replace(file, target)
                 except:
                     pass
-
+                    
             elif ext in ['jpg', 'png', 'webp', 'jpeg']:
-                # Định dạng lưu trữ cố định là .jpg
                 new_name = f"{date_prefix}_{video_id}.jpg"
                 target = os.path.join("output/thumb", new_name)
                 try:
-                    # Tiến hành chuyển đổi ảnh sang chuẩn JPG (RGB)
                     with Image.open(file) as img:
                         rgb_img = img.convert('RGB')
                         rgb_img.save(target, 'JPEG')
                     
-                    # Xóa tệp gốc tạm thời (như .webp) sau khi đổi đuôi thành công
                     if os.path.exists(file):
                         os.remove(file)
-                except Exception as img_err:
-                    # Phương án dự phòng nếu chuyển đổi lỗi
+                except:
                     fallback_name = f"{date_prefix}_{video_id}.{ext}"
                     target_fallback = os.path.join("output/thumb", fallback_name)
                     try:
                         os.replace(file, target_fallback)
                     except:
                         pass
-
+                        
             elif ext == "json":
                 new_name = f"{date_prefix}_{video_id}.{ext}"
                 target = os.path.join("output/json", new_name)
@@ -382,34 +349,18 @@ def download_video(video_url, log_callback, download_format):
 
             else:
                 continue
-
-        # title
+            
         title_file = f"{date_prefix}_{video_id}.txt"
-
-        with open(
-            os.path.join("output/tiêu đề", title_file),
-            "w",
-            encoding="utf-8"
-        ) as f:
+        title_path = os.path.join("output/tiêu đề", title_file)
+        with open(title_path, "w", encoding="utf-8") as f:
             f.write(title)
 
-        # description
-        with open(
-            os.path.join("output/mô tả", title_file),
-            "w",
-            encoding="utf-8"
-        ) as f:
+        desc_path = os.path.join("output/mô tả", title_file)
+        with open(desc_path, "w", encoding="utf-8") as f:
             f.write(description)
 
-        # tags
         if video_tags:
-
-            with open(
-                os.path.join("output/video_tags", title_file),
-                "w",
-                encoding="utf-8"
-            ) as f:
-
+            with open(os.path.join("output/video_tags", title_file), "w", encoding="utf-8") as f:
                 f.write("\n".join(video_tags))
         
         log_callback(f"✅ Tải xong: {title}")
@@ -418,13 +369,10 @@ def download_video(video_url, log_callback, download_format):
 
 
 def fetch_video_list(channel_url, mode, log_callback):
-
-    sort_map = {
-        'newest': 'date',
-        'oldest': 'date'
-    }
+    sort_map = {'newest': 'date', 'oldest': 'date'}
 
     ydl_opts = {
+        **get_base_ydl_opts(),
         'quiet': True,
         'extract_flat': True,
         'dump_single_json': True,
@@ -432,7 +380,6 @@ def fetch_video_list(channel_url, mode, log_callback):
     }
 
     with YoutubeDL(ydl_opts) as ydl:
-
         log_callback("📥 Đang lấy danh sách video...")
 
         info = ydl.extract_info(
@@ -449,55 +396,30 @@ def fetch_video_list(channel_url, mode, log_callback):
 
 
 def start_download():
-
     def log(msg):
-
         log_box.insert(tk.END, msg + "\n")
         log_box.see(tk.END)
         log_box.update_idletasks()
 
     channel_url = url_entry.get().strip()
-
-    send_channel_to_gsheet(channel_url)
-
     mode = mode_var.get()
-
     download_format = format_var.get()
 
     try:
-
         limit = int(limit_entry.get().strip())
-
         if limit <= 0:
             raise ValueError
-
     except ValueError:
-
-        messagebox.showerror(
-            "Lỗi",
-            "Số lượng video phải là số nguyên dương."
-        )
-
+        messagebox.showerror("Lỗi", "Số lượng video phải là số nguyên dương.")
         return
 
     if not channel_url:
-
-        messagebox.showerror(
-            "Lỗi",
-            "Vui lòng dán link kênh YouTube."
-        )
-
+        messagebox.showerror("Lỗi", "Vui lòng dán link kênh YouTube.")
         return
 
     try:
-
-        with open(
-            LAST_CHANNEL_FILE,
-            "w",
-            encoding="utf-8"
-        ) as f:
+        with open(LAST_CHANNEL_FILE, "w", encoding="utf-8") as f:
             f.write(channel_url)
-
     except:
         pass
 
@@ -509,189 +431,101 @@ def start_download():
     downloaded = load_downloaded()
 
     try:
-
-        # download channel info
         download_channel_info(channel_url, log)
 
-        entries, total = fetch_video_list(
-            channel_url,
-            mode,
-            log
-        )
+        entries, total = fetch_video_list(channel_url, mode, log)
 
         count = 0
-
         started = len(downloaded)
 
         for entry in entries:
-
             if count >= limit:
                 break
 
             vid = entry["id"]
-
             video_url = f"https://www.youtube.com/watch?v={vid}"
 
             if vid in downloaded:
                 continue
 
             index = started + count + 1
-
-            status_label.config(
-                text=f"🔢 Đã tải: {index} / {total} video"
-            )
-
-            log(f"⬇️ ({index}/{total}) {entry['title']}")
+            status_label.config(text=f"🔢 Đã tải: {index} / {total} video")
+            log(f"⬇️ ({index}/{total}) Đang tải: {entry['title']}")
 
             try:
-
-                vid_id = download_video(
-                    video_url,
-                    log,
-                    download_format
-                )
-
+                vid_id = download_video(video_url, log, download_format)
                 downloaded.append(vid_id)
-
                 save_downloaded(downloaded)
-
                 count += 1
-
+                time.sleep(2)
             except Exception as e:
-
                 log(f"❌ Lỗi tải: {e}")
 
-        log(f"\n✅ Đã tải {count} video.")
-
+        log(f"\n✅ Đã tải {count} video. Hoàn tất!")
         root.after(3000, root.destroy)
 
     except Exception as e:
-
-        messagebox.showerror(
-            "Lỗi",
-            f"Không thể lấy danh sách: {e}"
-        )
+        messagebox.showerror("Lỗi", f"Không thể lấy danh sách: {e}")
 
 
 check_system_and_license()
-
 auto_update()
 
 root = tk.Tk()
-
-root.title("YouTube Channel Downloader PRO")
-root.geometry("650x700")
-
+root.title("YouTube Channel Downloader")
+root.geometry("600x600")
 root.resizable(False, False)
 
-status_label = tk.Label(
-    root,
-    text="🔢 Đã tải: 0 / 0 video",
-    fg="blue"
-)
-
+status_label = tk.Label(root, text="🔢 Đã tải: 0 / 0 video", fg="blue")
 status_label.pack(pady=(5, 5))
 
-tk.Label(
-    root,
-    text="🔗 Dán link kênh YouTube:"
-).pack(pady=(5, 2))
+tk.Label(root, text="🔗 Dán link kênh YouTube:").pack(pady=(5, 2))
 
-url_entry = tk.Entry(root, width=75)
-
+url_entry = tk.Entry(root, width=70)
 url_entry.pack(pady=(0, 10))
 
 try:
-
-    with open(
-        LAST_CHANNEL_FILE,
-        "r",
-        encoding="utf-8"
-    ) as f:
-
+    with open(LAST_CHANNEL_FILE, "r", encoding="utf-8") as f:
         url_entry.insert(0, f.read().strip())
-
 except:
     pass
 
-tk.Label(
-    root,
-    text="📌 Chọn chế độ tải:"
-).pack()
+tk.Label(root, text="📌 Chọn chế độ tải:").pack()
 
 mode_var = tk.StringVar(value="newest")
 
 frm = tk.Frame(root)
-
 frm.pack()
 
-tk.Radiobutton(
-    frm,
-    text="Mới nhất",
-    variable=mode_var,
-    value="newest"
-).grid(row=0, column=0, padx=10)
+tk.Radiobutton(frm, text="Mới nhất", variable=mode_var, value="newest").grid(row=0, column=0, padx=10)
+tk.Radiobutton(frm, text="Cũ nhất", variable=mode_var, value="oldest").grid(row=0, column=1, padx=10)
 
-tk.Radiobutton(
-    frm,
-    text="Cũ nhất",
-    variable=mode_var,
-    value="oldest"
-).grid(row=0, column=1, padx=10)
-
-tk.Label(
-    root,
-    text="🎵 Chọn định dạng tải:"
-).pack(pady=(10, 2))
+tk.Label(root, text="🎵 Chọn định dạng tải:").pack(pady=(10, 2))
 
 format_var = tk.StringVar(value="mp4")
 
 frm_format = tk.Frame(root)
-
 frm_format.pack()
 
-tk.Radiobutton(
-    frm_format,
-    text="MP4 (video)",
-    variable=format_var,
-    value="mp4"
-).grid(row=0, column=0, padx=10)
+tk.Radiobutton(frm_format, text="MP4 (video)", variable=format_var, value="mp4").grid(row=0, column=0, padx=10)
+tk.Radiobutton(frm_format, text="MP3 (âm thanh)", variable=format_var, value="mp3").grid(row=0, column=1, padx=10)
 
-tk.Radiobutton(
-    frm_format,
-    text="MP3 (âm thanh)",
-    variable=format_var,
-    value="mp3"
-).grid(row=0, column=1, padx=10)
-
-tk.Label(
-    root,
-    text="🔢 Số lượng video muốn tải:"
-).pack(pady=(10, 2))
+tk.Label(root, text="🔢 Số lượng video muốn tải:").pack(pady=(10, 2))
 
 limit_entry = tk.Entry(root, width=10)
-
 limit_entry.insert(0, "1000")
-
 limit_entry.pack(pady=(0, 10))
 
 tk.Button(
     root,
     text="▶️ Bắt đầu tải",
-    command=lambda: threading.Thread(
-        target=start_download
-    ).start(),
+    command=lambda: threading.Thread(target=start_download).start(),
     bg="#4CAF50",
     fg="white",
     width=20
 ).pack(pady=15)
 
-log_box = tk.Text(
-    root,
-    height=20,
-    width=85
-)
-
+log_box = tk.Text(root, height=15, width=80)
 log_box.pack(padx=10, pady=10)
 
 root.mainloop()

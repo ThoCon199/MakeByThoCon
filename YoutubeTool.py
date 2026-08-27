@@ -11,7 +11,7 @@ import sys
 import requests
 from PIL import Image  
 
-CURRENT_VERSION = "0.0.4"
+CURRENT_VERSION = "0.0.5"
 LICENSE_KEY = "LICENSE-001"
 
 UPDATE_CHECK_URL = "https://raw.githubusercontent.com/ThoCon199/MakeByThoCon/main/tool_update.json"
@@ -407,9 +407,18 @@ def start_download():
         download_channel_info(channel_url, log)
         entries, total = fetch_video_list(channel_url, mode, log)
 
-        count = 0
+        # 1. Đếm tổng số video ĐÃ TẢI của nguồn này (bao gồm cả các lần trước)
+        # Tìm các video của kênh này đã có trong danh sách 'downloaded'
+        already_downloaded_count = sum(1 for entry in entries if entry.get("id") in downloaded)
+
+        # Cập nhật Label màu xanh ngay khi lấy xong danh sách: (Tổng đã tải / Tổng video của kênh)
+        update_status(f"🔢 Đã tải: {already_downloaded_count} / {total} video")
+
+        current_session_count = 0  # Số video tải thành công trong LẦN CHẠY NÀY
+
         for entry in entries:
-            if count >= limit:
+            # Dừng nếu đã tải đủ số lượng yêu cầu của lần này
+            if current_session_count >= limit:
                 break
 
             vid = entry.get("id")
@@ -418,28 +427,36 @@ def start_download():
 
             video_url = f"https://www.youtube.com/watch?v={vid}"
 
+            # Bỏ qua video đã tải ở các lần trước
             if vid in downloaded:
                 continue
 
-            index = count + 1
-            update_status(f"🔢 Đã tải: {index} / {min(limit, total)} video")
-            log(f"⬇️ ({index}/{min(limit, total)}) Đang tải: {entry.get('title', vid)}")
+            # 2. Đếm lượt tải hiện tại của LẦN CHẠY NÀY (chạy từ 1 đến limit)
+            run_index = current_session_count + 1
+            
+            # Log màu đen: Hiện tiến trình yêu cầu của lần chạy này (ví dụ: 1/15, 2/15)
+            log(f"⬇️ ({run_index}/{limit}) Đang tải: {entry.get('title', vid)}")
 
             try:
                 vid_id = download_video(video_url, log, download_format)
                 if vid_id:
                     downloaded.append(vid_id)
                     save_downloaded(downloaded)
-                    count += 1
+                    
+                    current_session_count += 1
+                    already_downloaded_count += 1
+                    
+                    # Cập nhật Label màu xanh: Tăng dần số tổng video đã tải của kênh (ví dụ: 16/300)
+                    update_status(f"🔢 Đã tải: {already_downloaded_count} / {total} video")
+                    
                 time.sleep(2)
             except Exception as e:
                 log(f"❌ Lỗi tải {vid}: {e}")
 
-        log(f"\n✅ Đã tải thành công {count} video. Hoàn tất!")
+        log(f"\n✅ Đã tải thành công {current_session_count} video. Hoàn tất!")
 
     except Exception as e:
         root.after(0, lambda: messagebox.showerror("Lỗi", f"Không thể lấy danh sách: {e}"))
-
 
 def on_start_click():
     threading.Thread(target=start_download, daemon=True).start()
